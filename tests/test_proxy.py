@@ -82,7 +82,15 @@ class ProxyTest(unittest.TestCase):
         self.assertEqual(_post(self.url, {"messages": [], "stream": True})[0], 400)
 
     def test_oversized_body(self):
-        self.assertEqual(_post(self.url, None, raw=b"x" * (proxy.MAX_BODY + 1))[0], 413)
+        # Declare the size but send no body: the proxy must answer 413 from the header alone. (Streaming 1 MB
+        # races the server's early close and fails with a broken pipe on fast machines.)
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.fw.server_address[1], timeout=10)
+        conn.putrequest("POST", "/v1/chat/completions")
+        conn.putheader("Content-Length", str(proxy.MAX_BODY + 1))
+        conn.endheaders()
+        self.assertEqual(conn.getresponse().status, 413)
+        conn.close()
 
     def test_unknown_path(self):
         self.assertEqual(_post(self.base + "/v1/nope", {})[0], 404)

