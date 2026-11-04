@@ -1,0 +1,15 @@
+# Demo: mock LLM + firewall. No keys, no external calls. Dashboard: http://127.0.0.1:8080/dashboard
+services:
+  mock-llm:
+    image: python:3.13-slim
+    working_dir: /app
+    volumes: ["./:/app:ro"]
+    command: python -m firewall.mock_llm --host 0.0.0.0 --port 8081
+  firewall:
+    image: python:3.13-slim
+    working_dir: /app
+    volumes: ["./:/app:ro"]
+    environment: {PYTHONDONTWRITEBYTECODE: "1"}
+    command: python -m firewall.proxy --host 0.0.0.0 --port 8080 --upstream http://mock-llm:8081 --audit-log /tmp/audit.jsonl
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: [mock-llm]
