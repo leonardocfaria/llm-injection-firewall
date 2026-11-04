@@ -8,15 +8,16 @@ _ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿­"))
 _RULES = [
     ("ignore_instructions", 0.95,
      r"\b(ignore|disregard|forget|override|bypass|skip)\b.{0,40}\b(previous|prior|above|earlier|preceding|all|your|the|any|initial|original)\b.{0,30}"
-     r"\b(instructions?|prompts?|rules|directives|guidelines|context|messages?|commands?)\b"),
+     r"\b(instructions?|directions|prompts?|rules|directives|guidelines|context|messages?|commands?)\b"),
     ("new_instructions", 0.7,
      r"\b(new|updated|real|actual|true)\s+(system\s+)?(instructions?|rules|directives)\s*(:|are|follow)"),
     ("role_reset", 0.6,
-     r"\b(you\s+are\s+now|from\s+now\s+on,?\s+you|pretend\s+(to\s+be|you\s+are)|act\s+as\s+(an?\s+)?(unrestricted|unfiltered|evil|jailbroken))"),
+     r"\b(you\s+are\s+now|from\s+now\s+on,?\s+you|act\s+as\s+(an?\s+)?(unrestricted|unfiltered|evil|jailbroken))"),
     ("jailbreak_persona", 0.9,
      r"\b(as\s+dan|dan\s+mode|dan(?=.{0,80}\b(anything|jailbr\w+|restrictions)\b)|do\s+anything\s+now|developer\s+mode|jailbreak(en)?|god\s*mode|no\s+(restrictions|limitations|filters|rules)|unfiltered\s+and\s+uncensored)\b"),
     ("prompt_exfiltration", 0.9,
-     r"\b(reveal|print|show|repeat|output|display|leak|tell\s+me|what\s+(is|are|was))\b.{0,40}\b(system\s+prompt|initial\s+prompt|hidden\s+(prompt|instructions)|"
+     r"\b(reveal|print|show|repeat|output|display|leak|read|tell\s+me|what\s+(is|are|was|were))\b.{0,40}\b(system\s+prompt|initial\s+prompt|hidden\s+(prompt|instructions)|"
+     r"(instructions|rules|prompt)\s+(that\s+)?you\s+(were|have\s+been)\s+given|"
      r"(your|the)\s+(instructions|rules|prompt)\s+(above|verbatim|word\s+for\s+word)|everything\s+above)"),
     ("fake_delimiter", 0.8,
      r"(<\s*/?\s*(system|im_start|im_end|instructions?)\s*>|\[/?(inst|system)\]|^#{2,}\s*(system|instruction)|<\|(im_start|im_end|system|endoftext)\|>)"),
@@ -24,7 +25,7 @@ _RULES = [
     ("exfil_send_data", 0.8,
      r"\b(send|post|forward|upload|exfiltrate|email)\b.{0,60}\b(conversation|chat\s+history|password|api\s+key|credentials|secrets?|tokens?|user\s+data)\b.{0,40}\b(to|at)\b"),
     ("tool_hijack", 0.75,
-     r"\b(call|invoke|execute|run|use)\s+(the\s+)?(tool|function)\b.{0,40}\b(without|instead|immediately|silently|do\s+not\s+tell)"),
+     r"\b(call|invoke|execute|run|use)\s+(the\s+)?([\w-]+\s+)?(tool|function)\b.{0,40}\b(without|instead|immediately|silently|do\s+not\s+tell)"),
     ("hidden_from_user", 0.7, r"\b(do\s+not|don'?t|never)\s+(tell|inform|mention\s+(this\s+)?to|reveal\s+(this\s+)?to|let)\s+the\s+user\b"),
     ("ai_addressing_doc", 0.6,
      r"\b(attention|note|important|instructions?)\s+(to|for)\s+(the\s+)?(ai|assistant|llm|language\s+model|chatbot|agent)\b"),
@@ -35,7 +36,9 @@ _COMPILED = [(n, w, re.compile(p, re.I | re.M | re.S)) for n, w, p in _RULES]
 
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).translate(_ZERO_WIDTH)
-    return re.sub(r"[ \t]+", " ", text).lower()
+    text = re.sub(r"[ \t]+", " ", text).lower()
+    # "i g n o r e" -> "ignore": join runs of 4+ single characters separated by spaces
+    return re.sub(r"\b(?:\w ){3,}\w\b", lambda m: m.group(0).replace(" ", ""), text)
 
 
 def score(text: str) -> tuple[float, list[str]]:

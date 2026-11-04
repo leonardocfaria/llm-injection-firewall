@@ -10,9 +10,12 @@ INSPECTED_ROLES = {"user", "tool"}  # system/assistant are the app's own text
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]*\s*|\n+")
 
 
+CLASSIFIER_MIN_WORDS = 15  # the training prompts are long (median ~1.5k chars); on a few words the model is guessing
+
+
 def inspect_text(text: str) -> dict:
     s, reasons = rules.score(text)
-    p = classifier.default().predict_proba(text)
+    p = classifier.default().predict_proba(text) if len(text.split()) >= CLASSIFIER_MIN_WORDS else 0.0
     if p >= 0.5:
         reasons = reasons + [f"classifier:{p:.2f}"]
     return {"score": round(max(s, p), 4), "reasons": reasons}

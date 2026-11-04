@@ -6,8 +6,8 @@ Train 4904, held-out test 1227 (130 positives). Threshold 0.5.
 | scorer | precision | recall | F1 | confusion matrix [[TN, FP], [FN, TP]] |
 |---|---|---|---|---|
 | classifier | 0.6875 | 0.8462 | 0.7586 | [[1047, 50], [20, 110]] |
-| rules_only | 0.2582 | 0.5462 | 0.3506 | [[893, 204], [59, 71]] |
-| rules_plus_classifier | 0.3343 | 0.9 | 0.4875 | [[864, 233], [13, 117]] |
+| rules_only | 0.2624 | 0.5308 | 0.3511 | [[903, 194], [61, 69]] |
+| runtime_policy (rules + classifier) | 0.3451 | 0.9 | 0.4989 | [[875, 222], [13, 117]] |
 
 Pure-Python scorer vs sklearn max |diff| on test set: 2.01e-09.
 

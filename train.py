@@ -15,7 +15,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
 from sklearn.model_selection import train_test_split
 
-from firewall import rules
+from firewall import policy, rules
 from firewall.classifier import MODEL_PATH, Classifier
 
 ROOT = Path(__file__).resolve().parent
@@ -74,13 +74,13 @@ def main():
     drift = max(abs(a - b) for a, b in zip(sk, py))
     assert drift < 1e-4, f"pure-Python scorer drifts from sklearn by {drift}"
 
-    combined = [max(rules.score(t)[0], p) for t, p in zip(xte, py)]
+    combined = [policy.inspect_text(t)["score"] for t in xte]  # exactly what the proxy scores at runtime
     report = {
         "dataset": model["meta"]["dataset"], "seed": SEED, "n_train": len(xtr), "n_test": len(xte),
         "test_positives": sum(yte), "threshold": 0.5, "max_abs_drift_vs_sklearn": drift,
         "classifier": metrics(yte, [int(p >= 0.5) for p in py]),
         "rules_only": metrics(yte, [int(rules.score(t)[0] >= 0.5) for t in xte]),
-        "rules_plus_classifier": metrics(yte, [int(s >= 0.5) for s in combined]),
+        "runtime_policy (rules + classifier)": metrics(yte, [int(s >= 0.5) for s in combined]),
     }
     out = ROOT / "reports"
     out.mkdir(exist_ok=True)
@@ -88,7 +88,7 @@ def main():
     lines = [f"# Classifier eval\n", f"Dataset: {report['dataset']}. Stratified 80/20 split, seed {SEED}.",
              f"Train {len(xtr)}, held-out test {len(xte)} ({sum(yte)} positives). Threshold 0.5.\n",
              "| scorer | precision | recall | F1 | confusion matrix [[TN, FP], [FN, TP]] |", "|---|---|---|---|---|"]
-    for k in ("classifier", "rules_only", "rules_plus_classifier"):
+    for k in ("classifier", "rules_only", "runtime_policy (rules + classifier)"):
         m = report[k]
         lines.append(f"| {k} | {m['precision']} | {m['recall']} | {m['f1']} | {m['confusion_matrix']} |")
     lines.append(f"\nPure-Python scorer vs sklearn max |diff| on test set: {drift:.2e}.")
