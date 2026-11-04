@@ -1,0 +1,54 @@
+{
+  "dataset": "verazuo/jailbreak_llms 2023_05_07 (MIT)",
+  "seed": 42,
+  "n_train": 4904,
+  "n_test": 1227,
+  "test_positives": 130,
+  "threshold": 0.5,
+  "max_abs_drift_vs_sklearn": 2.0068248729465665e-09,
+  "classifier": {
+    "precision": 0.6875,
+    "recall": 0.8462,
+    "f1": 0.7586,
+    "confusion_matrix": [
+      [
+        1047,
+        50
+      ],
+      [
+        20,
+        110
+      ]
+    ]
+  },
+  "rules_only": {
+    "precision": 0.2582,
+    "recall": 0.5462,
+    "f1": 0.3506,
+    "confusion_matrix": [
+      [
+        893,
+        204
+      ],
+      [
+        59,
+        71
+      ]
+    ]
+  },
+  "rules_plus_classifier": {
+    "precision": 0.3343,
+    "recall": 0.9,
+    "f1": 0.4875,
+    "confusion_matrix": [
+      [
+        864,
+        233
+      ],
+      [
+        13,
+        117
+      ]
+    ]
+  }
+}
