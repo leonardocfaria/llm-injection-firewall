@@ -1,5 +1,6 @@
 """Score untrusted messages and decide allow / redact / block."""
 import copy
+import hashlib
 import re
 
 from firewall import classifier, rules
@@ -49,7 +50,8 @@ def apply(messages: list, redact_at: float = 0.5, block_at: float = 0.8) -> dict
         if not isinstance(msg, dict) or msg.get("role") not in INSPECTED_ROLES:
             continue
         for holder, key in _texts(msg):
-            r = inspect_text(holder[key])
+            text = holder[key]
+            r = inspect_text(text)
             if r["score"] < redact_at:
                 continue
             # Tool documents are attacker-reachable but are not the user: redact them, never block on them.
@@ -57,8 +59,9 @@ def apply(messages: list, redact_at: float = 0.5, block_at: float = 0.8) -> dict
                 verdict = "block"
             else:
                 verdict = "redact"
-                holder[key] = _redact(holder[key], redact_at)
-            findings.append({"index": i, "role": msg["role"], "action": verdict, **r})
+                holder[key] = _redact(text, redact_at)
+            findings.append({"index": i, "role": msg["role"], "action": verdict, **r, "snippet": text[:80],
+                             "sha256": hashlib.sha256(text.encode()).hexdigest()})
             if verdict == "block":
                 action = "block"
             elif action == "allow":
