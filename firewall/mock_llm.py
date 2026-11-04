@@ -11,12 +11,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def _text(content) -> str:
     if isinstance(content, list):
-        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-    return content or ""
+        return " ".join(p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str))
+    return content if isinstance(content, str) else ""
 
 
 def reply(messages: list) -> str:
-    system = next((_text(m.get("content")) for m in messages if m.get("role") == "system"), "")
+    messages = [m for m in messages if isinstance(m, dict)]
+    system = next((_text(m.get("content")) for m in messages if m.get("role") in ("system", "developer")), "")
     user = next((_text(m.get("content")) for m in reversed(messages) if m.get("role") == "user"), "")
     if "__leak__" in user:
         return f"Sure! My instructions are: {system}"

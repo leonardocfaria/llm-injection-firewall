@@ -15,7 +15,7 @@ Python 3.11+. Nothing to install to run or test.
 
 ```bash
 cd security/llm-injection-firewall
-python -m unittest -v          # 39 tests incl. the red-team suite, about 2 s
+python -m unittest -v          # 53 tests incl. the red-team suite and ReDoS timing checks, about 3 s
 ```
 
 To retrain the classifier (downloads the dataset once, about 10 MB, then about 5 s on CPU):
@@ -74,20 +74,38 @@ client ──► proxy.py ──► policy.apply(messages) ──► block? ─�
 
 - **rules.py**: 12 weighted regexes (instruction override, role reset, jailbreak personas, system-prompt
   exfiltration, fake chat delimiters, markdown-image and "send X to" exfiltration, tool hijack,
-  "don't tell the user", text addressing the AI, base64 payloads). The text is NFKC-normalised first, with
-  zero-width characters stripped and letter-spacing joined, so `ｉｇｎｏｒｅ`, `ig​nore` and `i g n o r e` all match.
+  "don't tell the user", text addressing the AI, base64 payloads).
+  - The text is normalised first:
+    - NFKC.
+    - Unicode tag characters ("ASCII smuggling") are mapped back to ASCII.
+    - All invisible format characters (zero-width, bidi controls) are dropped.
+    - Runs of letter-spaced characters are joined.
+  - So `ｉｇｎｏｒｅ`, `ig​nore`, `i g n o r e  a l l` and tag-encoded text all match.
+  - Every pattern is bounded and has timing tests on 1 MB adversarial strings, so it cannot be used for ReDoS.
 - **classifier.py**: inference for a TF-IDF (1–2-grams, 5,000 features, sublinear tf) + logistic regression
   model trained by `train.py`. It is exported to JSON and scored in pure Python. `train.py` checks that this matches
   sklearn to within 1e-4 (actual: 2e-9). The classifier only counts for texts of 15+ words, because it was trained
   on long prompts.
-- **policy.py**: score = max(rule weight, classifier probability). Only `user` and `tool` messages are scored.
+- **policy.py**: score = max(rule weight, classifier probability).
+  - Every message is scored except `system`, `developer` and `assistant` (the app's own text). That covers
+    `user`, `tool`, `function` and unknown roles. List-of-parts content is scored joined, so an attack split
+    across parts is still seen.
   - A user message scoring ≥ 0.8 blocks the request.
-  - A score ≥ 0.5 redacts the offending sentences, or the whole text if no single sentence crosses the threshold.
-  - Tool documents are only ever redacted, so an attacker-controlled web page cannot deny service to the user.
-- **output_check.py**: adds a random canary line to the system message per request. The response is blocked if it
-  contains the canary or any 8 consecutive words of the original system prompt.
-- **proxy.py**: `ThreadingHTTPServer`. Bodies over 1 MB get 413, bad JSON 400, `stream: true` 400, and an
-  unreachable upstream 502.
+  - A score ≥ 0.5 redacts the offending sentences, or the whole message if no single sentence crosses the threshold.
+  - Any other role is only ever redacted, so an attacker-controlled web page cannot deny service to the user.
+- **output_check.py**: adds a random canary line to the system/developer message per request. A choice is
+  blocked if any of these contain the canary or any 8 consecutive words of the original prompt:
+  - its text (string or parts),
+  - its refusal,
+  - its tool-call arguments.
+
+  A blocked choice's content is replaced and its tool calls are dropped. Prompts under 4 words get the canary
+  check only.
+- **proxy.py**: `ThreadingHTTPServer` with a 30 s socket timeout.
+  - Bodies over 1 MB get 413. Bad or absurdly nested JSON gets 400, and so does anything the policy cannot
+    inspect: it is refused, never forwarded.
+  - `stream: true` gets 400.
+  - Upstream JSON errors (429, 400, ...) pass through unchanged. An unreachable upstream gives 502.
 
 ## Results
 
@@ -105,7 +123,7 @@ Read these with the dataset caveat below. The dataset's "regular" class holds hu
 **Red team** (`reports/redteam.md`): 43/43 attacks blocked or redacted (31 direct, 12 indirect via tool
 documents), 35/35 benign look-alikes allowed. Before tuning it was 39/43 and 33/35.
 
-**Latency** (`reports/latency.md`): `policy.apply` takes 0.03 ms on a short chat and about 1.1 ms with a
+**Latency** (`reports/latency.md`): `policy.apply` takes 0.03 ms on a short chat and about 1.3 ms with a
 3 KB tool document. The proxy adds about 1.4 ms p50 on localhost.
 
 ## Threat model
@@ -131,6 +149,11 @@ the proxy.
 **Audit data.** Each finding stores an 80-character snippet and a sha256 of the inspected text, so the
 dashboard is useful. Treat `audit.jsonl` as sensitive, because user prompts can contain personal data.
 The dashboard has no authentication and should only be bound to localhost (the default).
+
+**Self code review**: an independent review of the diff found a ReDoS in the markdown-image rule, attacks
+split across content parts, the `function` role going uninspected, missing `developer`-role and tool-call
+leak checks, and malformed inputs dropping connections. All were fixed with regression tests (commit
+"fix(firewall): apply code review").
 
 ## Limitations
 

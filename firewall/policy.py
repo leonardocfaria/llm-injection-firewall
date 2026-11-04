@@ -6,7 +6,7 @@ import re
 from firewall import classifier, rules
 
 REDACTED = "[REDACTED: possible prompt injection]"
-INSPECTED_ROLES = {"user", "tool"}  # system/assistant are the app's own text
+TRUSTED_ROLES = {"system", "developer", "assistant"}  # the app's own text; every other role is inspected
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]*\s*|\n+")
 
 
@@ -21,7 +21,8 @@ def inspect_text(text: str) -> dict:
     return {"score": round(max(s, p), 4), "reasons": reasons}
 
 
-def _redact(text: str, redact_at: float) -> str:
+def _redact(text: str, redact_at: float) -> tuple[str, bool]:
+    """Replace offending sentences. Returns (text, whether any sentence was replaced)."""
     out, hit = [], False
     for m in _SENTENCE.finditer(text):
         chunk = m.group(0)
@@ -30,19 +31,17 @@ def _redact(text: str, redact_at: float) -> str:
             hit = True
         else:
             out.append(chunk)
-    # The whole text scored high but no single sentence did: drop it all.
-    return "".join(out) if hit else REDACTED
+    return "".join(out), hit
 
 
-def _texts(msg: dict):
-    """Yield (container, key) pairs holding the message's text, for plain and list-of-parts content."""
+def _texts(msg: dict) -> list:
+    """(container, key) pairs holding the message's text, for plain and list-of-parts content."""
     c = msg.get("content")
     if isinstance(c, str):
-        yield msg, "content"
-    elif isinstance(c, list):
-        for part in c:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                yield part, "text"
+        return [(msg, "content")]
+    if isinstance(c, list):
+        return [(p, "text") for p in c if isinstance(p, dict) and isinstance(p.get("text"), str)]
+    return []
 
 
 def apply(messages: list, redact_at: float = 0.5, block_at: float = 0.8) -> dict:
@@ -50,23 +49,29 @@ def apply(messages: list, redact_at: float = 0.5, block_at: float = 0.8) -> dict
     messages = copy.deepcopy(messages)
     action, findings = "allow", []
     for i, msg in enumerate(messages):
-        if not isinstance(msg, dict) or msg.get("role") not in INSPECTED_ROLES:
+        role = msg.get("role") if isinstance(msg, dict) else None
+        if not isinstance(role, str) or role in TRUSTED_ROLES:
             continue
-        for holder, key in _texts(msg):
-            text = holder[key]
-            r = inspect_text(text)
-            if r["score"] < redact_at:
-                continue
-            # Tool documents are attacker-reachable but are not the user: redact them, never block on them.
-            if msg["role"] == "user" and r["score"] >= block_at:
-                verdict = "block"
-            else:
-                verdict = "redact"
-                holder[key] = _redact(text, redact_at)
-            findings.append({"index": i, "role": msg["role"], "action": verdict, **r, "snippet": text[:80],
-                             "sha256": hashlib.sha256(text.encode()).hexdigest()})
-            if verdict == "block":
-                action = "block"
-            elif action == "allow":
-                action = "redact"
+        parts = _texts(msg)
+        # Score the parts joined, as the model will read them: an attack split across parts is still one attack.
+        text = "\n".join(h[k] for h, k in parts)
+        r = inspect_text(text)
+        if r["score"] < redact_at:
+            continue
+        # Only the user can get a request blocked. Tool/function/other content is attacker-reachable but is
+        # not the user, so it is redacted: a hostile web page must not be able to deny service to the user.
+        if role == "user" and r["score"] >= block_at:
+            verdict = "block"
+        else:
+            verdict = "redact"
+            redacted = [_redact(h[k], redact_at) for h, k in parts]
+            hit = any(changed for _, changed in redacted)
+            for (h, k), (new, _) in zip(parts, redacted):
+                h[k] = new if hit else REDACTED  # no single sentence crossed the bar: drop the whole message
+        findings.append({"index": i, "role": role, "action": verdict, **r, "snippet": text[:80],
+                         "sha256": hashlib.sha256(text.encode()).hexdigest()})
+        if verdict == "block":
+            action = "block"
+        elif action == "allow":
+            action = "redact"
     return {"action": action, "messages": messages, "findings": findings}

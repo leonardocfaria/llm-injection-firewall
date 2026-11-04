@@ -2,7 +2,8 @@
 import re
 import unicodedata
 
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿­"))
+# Unicode "tag" characters (U+E0020-E007E) mirror ASCII invisibly ("ASCII smuggling"): map them back.
+_TAGS = {0xE0000 + c: c for c in range(0x20, 0x7F)}
 
 # (name, weight in [0,1], pattern). Patterns run on normalize()d text.
 _RULES = [
@@ -21,7 +22,8 @@ _RULES = [
      r"(your|the)\s+(instructions|rules|prompt)\s+(above|verbatim|word\s+for\s+word)|everything\s+above)"),
     ("fake_delimiter", 0.8,
      r"(<\s*/?\s*(system|im_start|im_end|instructions?)\s*>|\[/?(inst|system)\]|^#{2,}\s*(system|instruction)|<\|(im_start|im_end|system|endoftext)\|>)"),
-    ("exfil_markdown_image", 0.85, r"!\[[^\]]*\]\(\s*https?://[^)]*(\?|&)[^)]*=\s*[^)]*\)"),
+    # Bounded on purpose: unbounded [^)]* runs here backtracked cubically on attacker text (ReDoS).
+    ("exfil_markdown_image", 0.85, r"!\[[^\[\]\n]{0,200}\]\(\s*https?://[^()\s]{0,500}?[?&][^()\s=]{0,100}="),
     ("exfil_send_data", 0.8,
      r"\b(send|post|forward|upload|exfiltrate|email)\b.{0,60}\b(conversation|chat\s+history|password|api\s+key|credentials|secrets?|tokens?|user\s+data)\b.{0,40}\b(to|at)\b"),
     ("tool_hijack", 0.75,
@@ -35,10 +37,12 @@ _COMPILED = [(n, w, re.compile(p, re.I | re.M | re.S)) for n, w, p in _RULES]
 
 
 def normalize(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text).translate(_ZERO_WIDTH)
-    text = re.sub(r"[ \t]+", " ", text).lower()
-    # "i g n o r e" -> "ignore": join runs of 4+ single characters separated by spaces
-    return re.sub(r"\b(?:\w ){3,}\w\b", lambda m: m.group(0).replace(" ", ""), text)
+    text = unicodedata.normalize("NFKC", text.translate(_TAGS))
+    # drop invisible format characters (zero-width, bidi controls, soft hyphen, ...)
+    text = "".join(c for c in text if unicodedata.category(c) != "Cf").lower()
+    # "i g n o r e  a l l" -> "ignore all": join runs of 3+ single characters, before collapsing spaces
+    text = re.sub(r"\b(?:\w ){2,}\w\b", lambda m: m.group(0).replace(" ", ""), text)
+    return re.sub(r"[ \t]+", " ", text)
 
 
 def score(text: str) -> tuple[float, list[str]]:

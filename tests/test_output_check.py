@@ -25,7 +25,8 @@ class OutputCheckTest(unittest.TestCase):
         self.assertIn("system_prompt_leak", oc.check(out, SYS, None))
 
     def test_short_system_prompt_echoed(self):
-        self.assertIn("system_prompt_leak", oc.check("I was told: be terse.", "Be terse.", None))
+        self.assertIn("system_prompt_leak", oc.check("I was told: answer only in formal French.",
+                                                     "Answer only in formal French.", None))
 
     def test_normal_answer(self):
         self.assertEqual(oc.check("Our support hours are 9 to 5, Monday to Friday.", SYS, "abc123def456"), [])
@@ -36,3 +37,16 @@ class OutputCheckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OutputHardeningTest(unittest.TestCase):
+    def test_developer_role_gets_canary(self):
+        _, tok = oc.add_canary([{"role": "developer", "content": SYS}])
+        self.assertTrue(tok)
+
+    def test_short_prompt_partial_overlap_not_a_leak(self):
+        self.assertEqual(oc.check("Be helpful to your neighbours!", "Be helpful.", None), [])
+
+    def test_system_text_handles_parts(self):
+        self.assertEqual(oc.system_text([{"role": "developer", "content": [{"text": "a"}, {"text": 5}, "b"]}]), "a")
+        self.assertIsNone(oc.system_text([{"role": "user", "content": "x"}]))

@@ -18,12 +18,30 @@ CHAT_PATH = "/v1/chat/completions"
 BLOCKED_OUTPUT = "[blocked by llm-injection-firewall: the response leaked protected content]"
 
 
-def _system_prompt(messages: list) -> str | None:
-    for m in messages:
-        if isinstance(m, dict) and m.get("role") == "system":
-            c = m.get("content")
-            return " ".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else c
-    return None
+def check_response(resp, system: str | None, canary: str | None) -> list[str]:
+    """Check every choice's text, refusal and tool-call arguments for leaks; blank out leaking choices in place."""
+    reasons = []
+    choices = resp.get("choices") if isinstance(resp, dict) else None
+    for choice in choices if isinstance(choices, list) else []:
+        msg = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(msg, dict):
+            continue
+        c = msg.get("content")
+        texts = [c] if isinstance(c, str) else [p["text"] for p in c if isinstance(p, dict) and isinstance(p.get("text"), str)] if isinstance(c, list) else []
+        texts += [msg["refusal"]] if isinstance(msg.get("refusal"), str) else []
+        calls = msg.get("tool_calls") if isinstance(msg.get("tool_calls"), list) else []
+        calls += [msg["function_call"]] if isinstance(msg.get("function_call"), dict) else []
+        for call in calls:
+            fn = call.get("function", call) if isinstance(call, dict) else None
+            if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+                texts.append(fn["arguments"])
+        found = sorted({r for t in texts for r in output_check.check(t, system, canary)})
+        if found:
+            reasons += found
+            msg["content"] = BLOCKED_OUTPUT
+            for k in ("tool_calls", "function_call", "refusal"):
+                msg.pop(k, None)
+    return reasons
 
 
 def _dashboard(events: list) -> bytes:
@@ -46,6 +64,7 @@ td,th{{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left;vertical-ali
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "llm-injection-firewall"
+    timeout = 30  # a client that stalls mid-body must not hold a thread forever
 
     def log_message(self, *args):
         pass  # the audit log is the log
@@ -87,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(413, f"body larger than {MAX_BODY} bytes")
         try:
             body = json.loads(self.rfile.read(length))
-        except ValueError:
+        except (ValueError, RecursionError):  # RecursionError: absurdly deep nesting
             return self._error(400, "body is not valid JSON")
         if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
             return self._error(400, "'messages' must be a list")
@@ -96,7 +115,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "stream=true is not supported by the firewall")
 
         rid, audit = uuid.uuid4().hex, self.server.audit
-        decision = policy.apply(body["messages"], self.server.redact_at, self.server.block_at)
+        try:
+            decision = policy.apply(body["messages"], self.server.redact_at, self.server.block_at)
+        except Exception as e:  # last resort: a request we cannot inspect is refused, never forwarded
+            audit.log(request_id=rid, stage="input", action="error", reasons=[type(e).__name__])
+            return self._error(400, "request could not be inspected", request_id=rid)
         top = max(decision["findings"], key=lambda f: f["score"], default={})
         audit.log(request_id=rid, stage="input", action=decision["action"], score=top.get("score", 0.0),
                   reasons=sorted({r for f in decision["findings"] for r in f["reasons"]}),
@@ -105,7 +128,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "request blocked: possible prompt injection", "prompt_injection_blocked",
                                request_id=rid, reasons=sorted({r for f in decision["findings"] for r in f["reasons"]}))
 
-        system = _system_prompt(body["messages"])
+        system = output_check.system_text(body["messages"])
         messages, canary = output_check.add_canary(decision["messages"])
         req = urllib.request.Request(self.server.upstream + CHAT_PATH, json.dumps({**body, "messages": messages}).encode(),
                                      {"Content-Type": "application/json",
@@ -114,20 +137,19 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=self.server.timeout_s) as r:
                 resp = json.loads(r.read())
         except urllib.error.HTTPError as e:
+            # Pass upstream errors (429, 400, ...) through so clients can back off; there is no model output in them.
             audit.log(request_id=rid, stage="upstream", action="error", reasons=[f"upstream_http_{e.code}"])
-            return self._error(502, f"upstream returned HTTP {e.code}", "upstream_error", request_id=rid)
-        except (OSError, ValueError) as e:
+            err = e.read()
+            try:
+                json.loads(err)
+            except ValueError:
+                return self._error(502, f"upstream returned HTTP {e.code}", "upstream_error", request_id=rid)
+            return self._send(e.code, err)
+        except (OSError, ValueError, RecursionError) as e:
             audit.log(request_id=rid, stage="upstream", action="error", reasons=[type(e).__name__])
             return self._error(502, "upstream unreachable or returned invalid JSON", "upstream_error", request_id=rid)
 
-        out_reasons = []
-        for choice in resp.get("choices", []) if isinstance(resp, dict) else []:
-            msg = choice.get("message") if isinstance(choice, dict) else None
-            if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-                found = output_check.check(msg["content"], system, canary)
-                if found:
-                    out_reasons += found
-                    msg["content"] = BLOCKED_OUTPUT
+        out_reasons = check_response(resp, system, canary)
         if out_reasons:
             audit.log(request_id=rid, stage="output", action="block", score=1.0, reasons=sorted(set(out_reasons)))
         action = "block" if out_reasons else decision["action"]

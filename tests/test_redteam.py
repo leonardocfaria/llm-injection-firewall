@@ -9,9 +9,10 @@ HERE = Path(__file__).resolve().parent.parent / "redteam"
 
 def load(name):
     for line in (HERE / name).read_text(encoding="utf-8").splitlines():
-        if line.strip() and not line.startswith("#"):
-            role, _, text = line.partition("tool: ") if line.startswith("tool: ") else ("", "", line)
-            yield ("tool" if line.startswith("tool: ") else "user"), text
+        if line.startswith("tool: "):
+            yield "tool", line[len("tool: "):]
+        elif line.strip() and not line.startswith("#"):
+            yield "user", line
 
 
 def decide(role, text):
